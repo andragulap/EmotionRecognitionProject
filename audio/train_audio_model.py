@@ -6,9 +6,9 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLRO
 from sklearn.utils import class_weight
 import tensorflow as tf
 
-X = np.load('X_audio_spectrograms.npy')
-y = np.load('y_audio_labels.npy')
-actors = np.load('actors.npy')
+X = np.load('X_augmented.npy')
+y = np.load('y_augmented.npy')
+actors = np.load('actors_augmented.npy')
 
 
 X = (X - X.min()) / (X.max() - X.min())

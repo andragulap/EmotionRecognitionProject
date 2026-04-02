@@ -6,9 +6,9 @@ from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import train_test_split
 
 
-X = np.load('X_audio_spectrograms.npy')
-y = np.load('y_audio_labels.npy')
-actors = np.load('actors.npy')
+X = np.load('X_augmented.npy')
+y = np.load('Y_augmented.npy')
+actors = np.load('actors_augmented.npy')
 
 
 X = (X - X.min()) / (X.max() - X.min())

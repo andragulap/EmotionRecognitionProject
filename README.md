@@ -35,6 +35,8 @@ Below is the confusion matrix for the current audio-only emotion recognition mod
    ```bash
    pip install -r requirements.txt
    ```
+   
+
 
 
 
