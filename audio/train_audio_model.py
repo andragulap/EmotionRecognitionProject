@@ -5,13 +5,15 @@ import matplotlib.pyplot as plt
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from sklearn.utils import class_weight
 import tensorflow as tf
+from tensorflow.keras import Input, Model
 
 X = np.load('X_augmented.npy')
 y = np.load('y_augmented.npy')
 actors = np.load('actors_augmented.npy')
+is_aug = np.load('is_aug.npy')
 
 
-X = (X - X.min()) / (X.max() - X.min())
+
 
 actors_clean = np.array([int(str(a).strip()) for a in actors])
 unique_actors = np.unique(actors_clean)
@@ -23,12 +25,13 @@ print(f" RAVDESS actors: {len(ravdess_actors)}")
 print(f" CREMA-D actors: {len(crema_actors)}")
 
 
-train_rav, temp_rav = train_test_split(ravdess_actors, test_size=9, random_state=42)
-validation_rav, test_rav = train_test_split(temp_rav, test_size=3, random_state=42)
+# RAVDESS: 70% train / 15% val / 15% test  (~17 / 4 / 3 actori)
+train_rav, temp_rav = train_test_split(ravdess_actors, test_size=0.30, random_state=42)
+validation_rav, test_rav = train_test_split(temp_rav, test_size=0.50, random_state=42)
 
-
-train_crema, temp_crema = train_test_split(crema_actors, test_size=18, random_state=42)
-validation_crema, test_crema = train_test_split(temp_crema, test_size=9, random_state=42)
+# CREMA-D: 70% train / 15% val / 15% test
+train_crema, temp_crema = train_test_split(crema_actors, test_size=0.30, random_state=42)
+validation_crema, test_crema = train_test_split(temp_crema, test_size=0.50, random_state=42)
 
 
 train_actors_list = list(train_rav) + list(train_crema)
@@ -37,19 +40,18 @@ test_actors_list = list(test_rav) + list(test_crema)
 
 
 train_mask = np.isin(actors_clean, train_actors_list)
-validation_mask = np.isin(actors_clean, validation_actors_list)
-test_mask = np.isin(actors_clean, test_actors_list)
-
+# val si test folosesc DOAR semnalul original (is_aug==0), nu versiunile augmentate
+validation_mask = np.isin(actors_clean, validation_actors_list) & (is_aug == 0)
+test_mask = np.isin(actors_clean, test_actors_list) & (is_aug == 0)
 
 X_train, y_train = X[train_mask], y[train_mask]
 X_valid, y_valid = X[validation_mask], y[validation_mask]
 X_test, y_test = X[test_mask], y[test_mask]
 
+print(f"Train: {len(X_train)} samples | Val: {len(X_valid)} samples | Test: {len(X_test)} samples")
 
-if len(X_train.shape) == 3:
-    X_train = np.expand_dims(X_train, axis=-1)
-    X_valid = np.expand_dims(X_valid, axis=-1)
-    X_test = np.expand_dims(X_test, axis=-1)
+
+
 
 
 # np.random.seed(42)
@@ -73,38 +75,51 @@ weights = class_weight.compute_class_weight(
 class_weights = dict(enumerate(weights))
 
 
-def build_model(input_shape, num_classes):
-    model = models.Sequential([
+def build_model(input_shape=(128, 128, 3), num_classes=7):
+    inputs = layers.Input(shape=input_shape)
 
-        layers.Conv2D(32, (3, 3), activation='relu', input_shape=input_shape),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
+    # Block 1: (128, 128, 3) → (64, 64, 32)
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+    # Block 2: (64, 64, 32) → (32, 32, 64)
+    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+    # Block 3: (32, 32, 64) → (16, 16, 128)
+    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+    x = layers.Dropout(0.3)(x)
 
 
-        layers.Conv2D(64, (3, 3), activation='relu'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
+    x = layers.Permute((2, 1, 3))(x)
 
 
-        layers.Conv2D(128, (3, 3), activation='relu'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        layers.Dropout(0.3),
+    x = layers.Reshape((16, 16 * 128))(x)
 
 
-        layers.Flatten(),
-        layers.Dense(128, activation='relu'),
-        layers.Dropout(0.4),
-        layers.Dense(num_classes, activation='softmax')
-    ])
+    x = layers.Bidirectional(layers.LSTM(64, return_sequences=True, dropout=0.4, recurrent_dropout=0.3))(x)
+    x = layers.Bidirectional(layers.LSTM(32, dropout=0.4, recurrent_dropout=0.3))(x)
 
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
-                  loss='sparse_categorical_crossentropy',
-                  metrics=['accuracy'])
+
+    x = layers.Dense(64, activation='relu',
+                     kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
+    x = layers.Dropout(0.5)(x)
+    outputs = layers.Dense(num_classes, activation='softmax')(x)
+
+    model = models.Model(inputs, outputs)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
     return model
 
 
-model = build_model(input_shape=(128, 128, 1), num_classes=7)
+model = build_model(input_shape=(128, 128, 3), num_classes=7)
 
 
 early_stop = EarlyStopping(monitor='val_loss', patience=12, restore_best_weights=True)
@@ -120,8 +135,6 @@ history = model.fit(
     callbacks=[early_stop, checkpoint, lr_reducer]
 )
 
-
-#model.save('audio_spectrogram_model.h5')
 
 plt.figure(figsize=(12, 5))
 
@@ -144,4 +157,7 @@ plt.ylabel('Loss')
 plt.legend()
 
 plt.tight_layout()
+plt.savefig('../results/training_curves.png', dpi=150)
 plt.show()
+
+np.save('training_history.npy', history.history)
